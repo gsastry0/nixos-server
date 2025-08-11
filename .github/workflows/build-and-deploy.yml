@@ -39,7 +39,7 @@ jobs:
         nix-store --export $(nix-store -qR ./system-closure) | gzip > system-closure.tar.gz
         
     - name: Upload system closure
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: nixos-system-closure
         path: |
@@ -54,7 +54,7 @@ jobs:
     
     steps:
     - name: Download build artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: nixos-system-closure
         
