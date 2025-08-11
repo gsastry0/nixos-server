@@ -2,7 +2,7 @@
   description = "NixOS configuration for DigitalOcean droplet";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";  # Use stable instead of unstable
   };
 
   outputs = { self, nixpkgs }: {

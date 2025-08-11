@@ -1,6 +1,9 @@
+# configuration.nix - Simplified for GitHub Actions deployment
 { config, pkgs, ... }:
 
 {
+  # Don't import hardware-configuration.nix - it's handled in flake.nix
+
   # Time zone and locale
   time.timeZone = "UTC";
   i18n.defaultLocale = "en_US.UTF-8";
@@ -37,7 +40,7 @@
     vim wget curl git htop tmux tree unzip rsync
   ];
 
-  # Nix settings
+  # Nix settings optimized for small droplets
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
   # Auto cleanup to save space
@@ -57,5 +60,5 @@
   services.udisks2.enable = false;
   security.polkit.enable = false;
 
-  system.stateVersion = "25.05";
+  system.stateVersion = "24.05";
 }
