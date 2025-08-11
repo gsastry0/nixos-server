@@ -1,0 +1,78 @@
+# .github/workflows/build-and-deploy.yml
+
+name: Build NixOS Configuration
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Install Nix
+      uses: cachix/install-nix-action@v23
+      with:
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+          
+    - name: Setup Cachix (optional - speeds up builds)
+      uses: cachix/cachix-action@v12
+      with:
+        name: nix-community
+        
+    - name: Build NixOS system configuration
+      run: |
+        # Build the system closure (like hraban's approach)
+        nix build .#nixosConfigurations.droplet.config.system.build.toplevel \
+          --print-build-logs \
+          --out-link system-closure
+          
+    - name: Create deployment tarball
+      run: |
+        # Package the system closure for easy deployment
+        nix-store --export $(nix-store -qR ./system-closure) | gzip > system-closure.tar.gz
+        
+    - name: Upload system closure
+      uses: actions/upload-artifact@v3
+      with:
+        name: nixos-system-closure
+        path: |
+          system-closure
+          system-closure.tar.gz
+        retention-days: 7
+        
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Download build artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: nixos-system-closure
+        
+    - name: Install Nix
+      uses: cachix/install-nix-action@v23
+      
+    - name: Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+        
+    - name: Deploy to server
+      run: |
+        # Import the system closure on the server
+        cat system-closure.tar.gz | ssh root@${{ secrets.SERVER_HOST }} "gunzip | nix-store --import"
+        
+        # Activate the new configuration
+        SYSTEM_PATH=$(readlink ./system-closure)
+        ssh root@${{ secrets.SERVER_HOST }} "sudo $SYSTEM_PATH/bin/switch-to-configuration switch"
