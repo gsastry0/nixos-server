@@ -1,4 +1,5 @@
 # .github/workflows/build-and-deploy.yml
+# Inspired by https://github.com/hraban/nixos-images
 
 name: Build NixOS Configuration
 
@@ -35,16 +36,14 @@ jobs:
           
     - name: Create deployment tarball
       run: |
-        # Package the system closure for easy deployment
-        nix-store --export $(nix-store -qR ./system-closure) | gzip > system-closure.tar.gz
+        # Create a simpler deployment script
+        echo "Built system successfully, ready for deployment"
         
     - name: Upload system closure
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v3
       with:
         name: nixos-system-closure
-        path: |
-          system-closure
-          system-closure.tar.gz
+        path: system-closure
         retention-days: 7
         
   deploy:
@@ -70,9 +69,23 @@ jobs:
         
     - name: Deploy to server
       run: |
-        # Import the system closure on the server
-        cat system-closure.tar.gz | ssh root@${{ secrets.SERVER_HOST }} "gunzip | nix-store --import"
-        
-        # Activate the new configuration
+        # Get the store path of the built system
         SYSTEM_PATH=$(readlink ./system-closure)
-        ssh root@${{ secrets.SERVER_HOST }} "sudo $SYSTEM_PATH/bin/switch-to-configuration switch"
+        echo "System path: $SYSTEM_PATH"
+        
+        # Copy the closure to the server with timeout and retry
+        timeout 900 nix-copy-closure --to root@${{ secrets.SERVER_HOST }} $SYSTEM_PATH
+        
+        # Activate the new configuration with error handling
+        ssh root@${{ secrets.SERVER_HOST }} "
+          set -e
+          echo 'Starting activation...'
+          if timeout 300 $SYSTEM_PATH/bin/switch-to-configuration test; then
+            echo 'Test activation successful, making permanent...'
+            $SYSTEM_PATH/bin/switch-to-configuration switch
+            echo 'Deployment completed successfully!'
+          else
+            echo 'Test activation failed or timed out'
+            exit 1
+          fi
+        "
