@@ -34,14 +34,18 @@ jobs:
           
     - name: Create deployment info
       run: |
-        # Create a simpler deployment script
-        echo "Built system successfully, ready for deployment"
+        # Get the actual store path and save it
+        SYSTEM_PATH=$(readlink ./system-closure)
+        echo "System store path: $SYSTEM_PATH"
+        echo "$SYSTEM_PATH" > system-path.txt
         
     - name: Upload system closure
       uses: actions/upload-artifact@v4
       with:
         name: nixos-system-closure
-        path: system-closure
+        path: |
+          system-closure
+          system-path.txt
         retention-days: 7
         
   deploy:
@@ -67,23 +71,43 @@ jobs:
         
     - name: Deploy to server
       run: |
-        # Get the store path of the built system
-        SYSTEM_PATH=$(readlink ./system-closure)
-        echo "System path: $SYSTEM_PATH"
+        # Debug: Check what we have
+        echo "Contents of download directory:"
+        ls -la
         
-        # Copy the closure to the server with timeout and retry
-        timeout 900 nix-copy-closure --to root@${{ secrets.SERVER_HOST }} $SYSTEM_PATH
+        # Get the system path
+        if [ -f system-path.txt ]; then
+          SYSTEM_PATH=$(cat system-path.txt)
+          echo "System path from file: $SYSTEM_PATH"
+        else
+          echo "ERROR: system-path.txt not found"
+          exit 1
+        fi
         
-        # Activate the new configuration with error handling
-        ssh root@${{ secrets.SERVER_HOST }} "
-          set -e
-          echo 'Starting activation...'
-          if timeout 300 $SYSTEM_PATH/bin/switch-to-configuration test; then
-            echo 'Test activation successful, making permanent...'
-            $SYSTEM_PATH/bin/switch-to-configuration switch
-            echo 'Deployment completed successfully!'
-          else
-            echo 'Test activation failed or timed out'
-            exit 1
-          fi
-        "
+        # Verify the path exists
+        if [ ! -e "$SYSTEM_PATH" ]; then
+          echo "ERROR: System path $SYSTEM_PATH does not exist"
+          exit 1
+        fi
+        
+        echo "Copying closure to server..."
+        if timeout 900 nix-copy-closure --to root@${{ secrets.SERVER_HOST }} $SYSTEM_PATH; then
+          echo "Copy successful, activating configuration..."
+          
+          # Activate the new configuration with error handling
+          ssh root@${{ secrets.SERVER_HOST }} "
+            set -e
+            echo 'Starting activation...'
+            if timeout 300 $SYSTEM_PATH/bin/switch-to-configuration test; then
+              echo 'Test activation successful, making permanent...'
+              $SYSTEM_PATH/bin/switch-to-configuration switch
+              echo 'Deployment completed successfully!'
+            else
+              echo 'Test activation failed or timed out'
+              exit 1
+            fi
+          "
+        else
+          echo "ERROR: Failed to copy closure to server"
+          exit 1
+        fi
