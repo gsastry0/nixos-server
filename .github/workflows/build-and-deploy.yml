@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     
     steps:
@@ -32,36 +32,10 @@ jobs:
           --print-build-logs \
           --out-link system-closure
           
-    - name: Create deployment info
-      run: |
-        # Get the actual store path and save it
+        # Get the store path for deployment
         SYSTEM_PATH=$(readlink ./system-closure)
-        echo "System store path: $SYSTEM_PATH"
-        echo "$SYSTEM_PATH" > system-path.txt
+        echo "Built system: $SYSTEM_PATH"
         
-    - name: Upload system closure
-      uses: actions/upload-artifact@v4
-      with:
-        name: nixos-system-closure
-        path: |
-          system-closure
-          system-path.txt
-        retention-days: 7
-        
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    
-    steps:
-    - name: Download build artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: nixos-system-closure
-        
-    - name: Install Nix
-      uses: cachix/install-nix-action@v23
-      
     - name: Setup SSH
       run: |
         mkdir -p ~/.ssh
@@ -70,25 +44,11 @@ jobs:
         ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
         
     - name: Deploy to server
+      if: github.ref == 'refs/heads/main'
       run: |
-        # Debug: Check what we have
-        echo "Contents of download directory:"
-        ls -la
-        
-        # Get the system path
-        if [ -f system-path.txt ]; then
-          SYSTEM_PATH=$(cat system-path.txt)
-          echo "System path from file: $SYSTEM_PATH"
-        else
-          echo "ERROR: system-path.txt not found"
-          exit 1
-        fi
-        
-        # Verify the path exists
-        if [ ! -e "$SYSTEM_PATH" ]; then
-          echo "ERROR: System path $SYSTEM_PATH does not exist"
-          exit 1
-        fi
+        # Get the store path
+        SYSTEM_PATH=$(readlink ./system-closure)
+        echo "Deploying system: $SYSTEM_PATH"
         
         echo "Copying closure to server..."
         if timeout 900 nix-copy-closure --to root@${{ secrets.SERVER_HOST }} $SYSTEM_PATH; then
