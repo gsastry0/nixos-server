@@ -54,18 +54,14 @@ jobs:
         if timeout 900 nix-copy-closure --to root@${{ secrets.SERVER_HOST }} $SYSTEM_PATH; then
           echo "Copy successful, activating configuration..."
           
-          # Activate the new configuration with error handling
+          # Activate with safer method - boot instead of immediate switch
           ssh root@${{ secrets.SERVER_HOST }} "
             set -e
-            echo 'Starting activation...'
-            if timeout 300 $SYSTEM_PATH/bin/switch-to-configuration test; then
-              echo 'Test activation successful, making permanent...'
-              $SYSTEM_PATH/bin/switch-to-configuration switch
-              echo 'Deployment completed successfully!'
-            else
-              echo 'Test activation failed or timed out'
-              exit 1
-            fi
+            echo 'Setting up new boot configuration...'
+            $SYSTEM_PATH/bin/switch-to-configuration boot
+            echo 'Configuration set for next boot. Rebooting to apply...'
+            nohup bash -c 'sleep 2 && reboot' > /dev/null 2>&1 &
+            echo 'Reboot initiated. System will be available shortly.'
           "
         else
           echo "ERROR: Failed to copy closure to server"
