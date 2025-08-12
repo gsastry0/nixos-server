@@ -1,7 +1,5 @@
 # .github/workflows/build-and-deploy.yml
-# Inspired by https://github.com/hraban/nixos-images
-
-name: Build NixOS Configuration
+name: Build and Deploy NixOS
 
 on:
   push:
@@ -29,18 +27,18 @@ jobs:
         
     - name: Build NixOS system configuration
       run: |
-        # Build the system closure (like hraban's approach)
+        # Build the system closure
         nix build .#nixosConfigurations.droplet.config.system.build.toplevel \
           --print-build-logs \
           --out-link system-closure
           
-    - name: Create deployment tarball
+    - name: Create deployment info
       run: |
         # Create a simpler deployment script
         echo "Built system successfully, ready for deployment"
         
     - name: Upload system closure
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: nixos-system-closure
         path: system-closure
