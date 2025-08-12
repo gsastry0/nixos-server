@@ -1,4 +1,3 @@
-# .github/workflows/build-and-deploy.yml
 name: Build and Deploy NixOS
 
 on:
@@ -11,59 +10,79 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v4
-      
+    
     - name: Install Nix
       uses: cachix/install-nix-action@v23
       with:
+        nix_path: nixpkgs=channel:nixos-unstable
         extra_nix_config: |
           experimental-features = nix-command flakes
-          
+    
     - name: Setup Cachix (optional - speeds up builds)
       uses: cachix/cachix-action@v12
       with:
         name: nix-community
         
-    - name: Build NixOS system configuration
+    - name: Build NixOS system
       run: |
-        # Build the system closure
+        # Build the flake system configuration
         nix build .#nixosConfigurations.droplet.config.system.build.toplevel \
           --print-build-logs \
           --out-link system-closure
-          
-        # Get the store path for deployment
+        
+        # Create a tarball of the built system
         SYSTEM_PATH=$(readlink ./system-closure)
         echo "Built system: $SYSTEM_PATH"
-        
-    - name: Setup SSH
+        nix-store --export $(nix-store -qR $SYSTEM_PATH) | gzip > system.tar.gz
+    
+    - name: Deploy to server (if main branch)
+      if: github.ref == 'refs/heads/main'
       run: |
+        # Install SSH key
         mkdir -p ~/.ssh
         echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+        ssh-keyscan -H ${{ secrets.HOST }} >> ~/.ssh/known_hosts
         
-    - name: Deploy to server
-      if: github.ref == 'refs/heads/main'
-      run: |
-        # Get the store path
-        SYSTEM_PATH=$(readlink ./system-closure)
-        echo "Deploying system: $SYSTEM_PATH"
+        # Copy system closure to server
+        scp system.tar.gz root@${{ secrets.HOST }}:/tmp/
         
-        echo "Copying closure to server..."
-        if timeout 900 nix-copy-closure --to root@${{ secrets.SERVER_HOST }} $SYSTEM_PATH; then
-          echo "Copy successful, activating configuration..."
+        # Deploy on server using safer boot method
+        ssh root@${{ secrets.HOST }} << 'EOF'
+          set -e
           
-          # Activate with safer method - boot instead of immediate switch
-          ssh root@${{ secrets.SERVER_HOST }} "
-            set -e
-            echo 'Setting up new boot configuration...'
-            $SYSTEM_PATH/bin/switch-to-configuration boot
-            echo 'Configuration set for next boot. Rebooting to apply...'
-            nohup bash -c 'sleep 2 && reboot' > /dev/null 2>&1 &
-            echo 'Reboot initiated. System will be available shortly.'
-          "
-        else
-          echo "ERROR: Failed to copy closure to server"
-          exit 1
-        fi
+          echo "Importing system closure..."
+          cd /tmp
+          gunzip -c system.tar.gz | nix-store --import
+          
+          # Find the system path from the imported closure
+          SYSTEM_PATH=$(nix-store -q --references /tmp/system.tar.gz | grep -E '/nix/store/.*-nixos-system-' | head -1)
+          if [ -z "$SYSTEM_PATH" ]; then
+            # Fallback: build locally if import fails
+            echo "Building system locally as fallback..."
+            SYSTEM_PATH=$(nix build .#nixosConfigurations.droplet.config.system.build.toplevel --no-link --print-out-paths 2>/dev/null || \
+                         nix-build '<nixpkgs/nixos>' -A system -I nixos-config=/etc/nixos/configuration.nix --no-out-link)
+          fi
+          
+          echo "System path: $SYSTEM_PATH"
+          
+          # Use boot method instead of switch - this is the key change!
+          echo "Setting system as boot configuration..."
+          $SYSTEM_PATH/bin/switch-to-configuration boot
+          
+          echo "System prepared for boot. Rebooting to apply changes..."
+          
+          # Clean reboot
+          shutdown -r +1 "NixOS deployment complete, rebooting in 1 minute"
+        EOF
+        
+        echo "Deployment initiated. Server will reboot in 1 minute to apply changes."
+        echo "Check server status in a few minutes with: ssh root@${{ secrets.HOST }} 'systemctl status'"
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        rm -f system.tar.gz
+        rm -f ~/.ssh/id_rsa
